@@ -70,9 +70,7 @@ EcMaster::~EcMaster()
     //
   }
   for (auto & domain : domain_info_) {
-    if (domain.second != NULL) {
-      delete domain.second;
-    }
+    delete domain.second;
   }
 }
 
@@ -130,10 +128,7 @@ void EcMaster::addSlave(uint16_t alias, uint16_t position, EcSlave * slave)
   for (auto & iter : domain_map) {
     // get the domain info, create if necessary
     uint32_t domain_index = iter.first;
-    DomainInfo * domain_info = NULL;
-    if (domain_info_.count(domain_index)) {
-      domain_info = domain_info_.at(domain_index);
-    }
+    DomainInfo * domain_info = domain_info_[domain_index];
     if (domain_info == NULL) {
       domain_info = new DomainInfo(master_);
       domain_info_[domain_index] = domain_info;
@@ -144,6 +139,7 @@ void EcMaster::addSlave(uint16_t alias, uint16_t position, EcSlave * slave)
       iter.second, domain_info,
       slave);
   }
+
 }
 
 int EcMaster::configSlaveSdo(
@@ -215,20 +211,17 @@ void EcMaster::registerPDOInDomain(
   domain_info->domain_regs.back() = empty;
 }
 
-bool EcMaster::activate()
+void EcMaster::activate()
 {
   // register domain
   for (auto & iter : domain_info_) {
     DomainInfo * domain_info = iter.second;
-    if (domain_info == NULL) {
-      throw std::runtime_error("Null domain info: " + std::to_string(iter.first));
-    }
     bool domain_status = ecrt_domain_reg_pdo_entry_list(
       domain_info->domain,
       &(domain_info->domain_regs[0]));
     if (domain_status) {
       printWarning("Activate. Failed to register domain PDO entries.");
-      return false;
+      return;
     }
   }
   // set application time
@@ -240,22 +233,26 @@ bool EcMaster::activate()
   bool activate_status = ecrt_master_activate(master_);
   if (activate_status) {
     printWarning("Activate. Failed to activate master.");
-    return false;
+    return;
+  }
+  else
+  {
+    printWarning("Master activated");
   }
 
   // retrieve domain data
   for (auto & iter : domain_info_) {
     DomainInfo * domain_info = iter.second;
-    if (domain_info == NULL) {
-      throw std::runtime_error("Null domain info: " + std::to_string(iter.first));
-    }
     domain_info->domain_pd = ecrt_domain_data(domain_info->domain);
     if (domain_info->domain_pd == NULL) {
       printWarning("Activate. Failed to retrieve domain process data.");
-      return false;
+      return;
+    }  
+    else
+    {
+      printWarning("Retrieved domain process data.");
     }
   }
-  return true;
 }
 
 void EcMaster::update(uint32_t domain)
@@ -263,33 +260,36 @@ void EcMaster::update(uint32_t domain)
   // receive process data
   ecrt_master_receive(master_);
 
-  DomainInfo * domain_info = domain_info_.at(domain);
-  if (domain_info == NULL) {
-    throw std::runtime_error("Null domain info: " + std::to_string(domain));
-  }
+  DomainInfo * domain_info = domain_info_[domain];
 
   ecrt_domain_process(domain_info->domain);
 
   // check process data state (optional)
   checkDomainState(domain);
-
-  // check for master and slave state change
-  if (update_counter_ % check_state_frequency_ == 0) {
-    checkMasterState();
-    checkSlaveStates();
-  }
-
-  // read and write process data
-  for (DomainInfo::Entry & entry : domain_info->entries) {
-    for (int i = 0; i < entry.num_pdos; ++i) {
-      (entry.slave)->processData(i, domain_info->domain_pd + entry.offset[i]);
+  // if(checkDomainStateBool(domain))
+  // {
+    // check for master and slave state change
+    if (update_counter_ % check_state_frequency_ == 0) {
+      checkMasterState();
+      checkSlaveStates();
     }
-  }
+
+    // read and write process data
+    for (DomainInfo::Entry & entry : domain_info->entries) {
+      for (int i = 0; i < entry.num_pdos; ++i) {
+        (entry.slave)->processData(i, domain_info->domain_pd + entry.offset[i]);
+      }
+    }
+  // }
 
   struct timespec t;
 
   clock_gettime(CLOCK_REALTIME, &t);
   ecrt_master_application_time(master_, EC_NEWTIMEVAL2NANO(t));
+  // // print the difference between two consecutive time stamps in microseconds
+  // std::cout << "Difference: " << (t.tv_nsec - last_t.tv_nsec) / 1000 << std::endl;
+  // last_t = t;
+
   ecrt_master_sync_reference_clock(master_);
   ecrt_master_sync_slave_clocks(master_);
 
@@ -305,10 +305,7 @@ void EcMaster::readData(uint32_t domain)
   // receive process data
   ecrt_master_receive(master_);
 
-  DomainInfo * domain_info = domain_info_.at(domain);
-  if (domain_info == NULL) {
-    throw std::runtime_error("Null domain info: " + std::to_string(domain));
-  }
+  DomainInfo * domain_info = domain_info_[domain];
 
   ecrt_domain_process(domain_info->domain);
 
@@ -333,11 +330,7 @@ void EcMaster::readData(uint32_t domain)
 
 void EcMaster::writeData(uint32_t domain)
 {
-  DomainInfo * domain_info = domain_info_.at(domain);
-  if (domain_info == NULL) {
-    throw std::runtime_error("Null domain info: " + std::to_string(domain));
-  }
-
+  DomainInfo * domain_info = domain_info_[domain];
   // read and write process data
   for (DomainInfo::Entry & entry : domain_info->entries) {
     for (int i = 0; i < entry.num_pdos; ++i) {
@@ -380,6 +373,8 @@ void EcMaster::run(SIMPLECAT_CONTRL_CALLBACK user_callback)
     // wait until next shot
     clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
 
+    std::cout << "running" << std::endl;
+
     // update EtherCAT bus
     this->update();
 
@@ -421,11 +416,12 @@ void EcMaster::setThreadHighPriority()
 
 void EcMaster::setThreadRealTime()
 {
+
   /* Declare ourself as a real time task, priority 49.
       PRREMPT_RT uses priority 50
       for kernel tasklets and interrupt handler by default */
   struct sched_param param;
-  param.sched_priority = 49;
+  param.sched_priority = 90;
   // pthread_t this_thread = pthread_self();
   if (sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
     perror("sched_setscheduler failed");
@@ -448,21 +444,44 @@ void EcMaster::setThreadRealTime()
 
 void EcMaster::checkDomainState(uint32_t domain)
 {
-  DomainInfo * domain_info = domain_info_.at(domain);
-  if (domain_info == NULL) {
-    throw std::runtime_error("Null domain info: " + std::to_string(domain));
-  }
+  DomainInfo * domain_info = domain_info_[domain];
 
   ec_domain_state_t ds;
   ecrt_domain_state(domain_info->domain, &ds);
 
   if (ds.working_counter != domain_info->domain_state.working_counter) {
     printf("Domain: WC %u.\n", ds.working_counter);
+    for (auto & entry : domain_info->entries) {
+        printf("Vendor ID : %u", entry.slave->vendor_id_);
+    }
+    printf("--------------------");
   }
+
   if (ds.wc_state != domain_info->domain_state.wc_state) {
     printf("Domain: State %u.\n", ds.wc_state);
   }
   domain_info->domain_state = ds;
+}
+
+bool EcMaster::checkDomainStateBool(uint32_t domain)
+{
+  bool res = true;
+  DomainInfo * domain_info = domain_info_[domain];
+
+  ec_domain_state_t ds;
+  ecrt_domain_state(domain_info->domain, &ds);
+
+  if (ds.working_counter != domain_info->domain_state.working_counter) {
+    printf("Domain: WC %u.\n", ds.working_counter);
+    res = false;
+  }
+
+  if (ds.wc_state != domain_info->domain_state.wc_state) {
+    printf("Domain: State %u.\n", ds.wc_state);
+    res = false;
+  }
+  domain_info->domain_state = ds;
+  return res;
 }
 
 

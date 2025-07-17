@@ -44,12 +44,10 @@ release = "1.0.0"
 extensions = [
     "sphinx_rtd_theme",
     "sphinx_mdinclude",
-    "sphinx.ext.mathjax",
+    "sphinx.ext.imgmath",
     "sphinx.ext.todo",
     "sphinx.ext.graphviz",
     "sphinxcontrib.plantuml",
-    "sphinx_copybutton",
-    "sphinx_tabs.tabs",
     "breathe",
 ]
 

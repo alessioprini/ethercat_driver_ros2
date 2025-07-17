@@ -46,7 +46,7 @@ public:
   int configSlaveSdo(uint16_t slave_position, SdoConfigEntry sdo_config, uint32_t * abort_code);
 
   /** call after adding all slaves, and before update */
-  bool activate();
+  void activate();
 
   /** perform one EtherCAT cycle, passing the domain to the slaves */
   virtual void update(uint32_t domain = 0);
@@ -110,6 +110,9 @@ private:
   /** check for change in the domain state */
   void checkDomainState(uint32_t domain);
 
+  /** check for change in the domain state */
+  bool checkDomainStateBool(uint32_t domain);
+
   /** check for change in the master state */
   void checkMasterState();
 
@@ -170,6 +173,11 @@ private:
   uint32_t check_state_frequency_ = 10;
 
   uint32_t interval_;
+
+  uint32_t last_time = 0;
+  struct timespec last_t;
+
+
 };
 
 }  // namespace ethercat_interface

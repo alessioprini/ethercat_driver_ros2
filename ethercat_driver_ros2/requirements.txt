@@ -3,5 +3,3 @@ sphinxcontrib-plantuml
 sphinx-mdinclude
 breathe
 exhale
-sphinx-copybutton
-sphinx-tabs

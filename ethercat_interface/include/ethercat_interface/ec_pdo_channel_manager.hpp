@@ -21,8 +21,10 @@
 #include <string>
 #include <vector>
 #include <limits>
+#include <cstring>
 
 #include "yaml-cpp/yaml.h"
+#include <bitset>
 
 namespace ethercat_interface
 {
@@ -67,6 +69,14 @@ public:
       last_value = static_cast<double>(EC_READ_S64(domain_address));
     } else if (data_type == "bool") {
       last_value = (EC_READ_U8(domain_address) & data_mask) ? 1 : 0;
+    } else if (data_type == "octet_string") {
+      // trasformo i primi 8 byte in un double
+      // last_value = 0;
+      // for (int i = 0; i < 8; i++) {
+      //   last_value += EC_READ_U8(domain_address + i) * pow(256, 7 - i);
+      // }
+      auto val = EC_READ_U64(domain_address);
+      std::memcpy(&last_value, &val, sizeof(last_value));
     } else {
       last_value = static_cast<double>(EC_READ_U8(domain_address) & data_mask);
     }
@@ -92,6 +102,14 @@ public:
       EC_WRITE_U64(domain_address, static_cast<uint64_t>(value));
     } else if (data_type == "int64") {
       EC_WRITE_S64(domain_address, static_cast<int64_t>(value));
+    } else if (data_type == "octet_string") {
+      // trasformo il double in 8 byte
+      uint64_t val;
+      std::memcpy(&val, &value, sizeof(value));
+      // std::bitset<64> binary(val);
+      // std::cout << binary << std::endl;
+
+      EC_WRITE_U64(domain_address, val);
     } else {
       buffer_ = EC_READ_U8(domain_address);
       if (popcount(data_mask) == 1) {
@@ -106,7 +124,7 @@ public:
     last_value = value;
   }
 
-  void ec_update(uint8_t * domain_address)
+  void ec_update(uint8_t * domain_address, bool dbg = false)
   {
     // update state interface
     if (pdo_type == TPDO) {
@@ -115,11 +133,18 @@ public:
         state_interface_ptr_->at(interface_index) = last_value;
       }
     } else if (pdo_type == RPDO && allow_ec_write) {
+
       if (interface_index >= 0 &&
         !std::isnan(command_interface_ptr_->at(interface_index)) &&
         !override_command)
       {
-        ec_write(domain_address, factor * command_interface_ptr_->at(interface_index) + offset);
+        if (dbg) {
+          std::cout << "writing to " << index << " " << sub_index << " " << static_cast<int32_t>(factor * command_interface_ptr_->at(interface_index) + offset) << std::endl;
+          ec_write(domain_address, factor * command_interface_ptr_->at(interface_index) + offset);
+        }
+        else{
+          ec_write(domain_address, factor * command_interface_ptr_->at(interface_index) + offset);
+        }
       } else {
         if (!std::isnan(default_value)) {
           ec_write(domain_address, default_value);
@@ -196,6 +221,8 @@ public:
       return 32;
     } else if (type == "int64" || type == "uint64") {
       return 64;
+    } else if (type == "octet_string") {
+      return 80; // modificato per ambusim
     } else if (type.find("bit") != std::string::npos) {
       std::string n_bits = type.substr(type.find("bit") + 3);
       return static_cast<uint8_t>(std::stoi(n_bits));
